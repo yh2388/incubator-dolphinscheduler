@@ -19,43 +19,45 @@
     <div class="table-box">
       <table class="fixed">
         <tr>
-          <th scope="col">
+          <th scope="col" style="min-width: 50px">
             <span>{{$t('#')}}</span>
           </th>
-          <th scope="col">
+          <th scope="col" style="min-width: 200px;max-width: 300px;">
             <span>{{$t('Name')}}</span>
           </th>
-          <th scope="col">
+          <th scope="col" style="min-width: 200px;max-width: 300px;">
             <span>{{$t('Process Instance')}}</span>
           </th>
-          <th scope="col" width="70">
+          <th scope="col" style="min-width: 60px">
             <span>{{$t('Executor')}}</span>
           </th>
-          <th scope="col" width="90">
-            <span>{{$t('Node Type')}}</span>
+          <th scope="col" style="min-width: 70px">
+            <span style="margin-left: 5px">{{$t('Node Type')}}</span>
           </th>
-          <th scope="col" width="40">
+          <th scope="col" style="min-width: 30px">
             <span>{{$t('State')}}</span>
           </th>
-          <th scope="col" width="140">
+          <th scope="col" style="min-width: 130px">
             <span>{{$t('Submit Time')}}</span>
           </th>
-          <th scope="col" width="140">
+          <th scope="col" style="min-width: 130px">
             <span>{{$t('Start Time')}}</span>
           </th>
-          <th scope="col" width="140">
+          <th scope="col" style="min-width: 130px">
             <span>{{$t('End Time')}}</span>
           </th>
-          <th scope="col" width="110">
+          <th scope="col" style="min-width: 130px">
             <span>{{$t('host')}}</span>
           </th>
-          <th scope="col" width="74">
+          <th scope="col" style="min-width: 70px">
             <span>{{$t('Duration')}}(s)</span>
           </th>
-          <th scope="col" width="84">
-            <span>{{$t('Retry Count')}}</span>
+          <th scope="col" style="min-width: 60px">
+            <div style="width: 50px">
+              <span>{{$t('Retry Count')}}</span>
+            </div>
           </th>
-          <th scope="col" width="50">
+          <th scope="col" style="min-width: 60px">
             <span>{{$t('Operation')}}</span>
           </th>
         </tr>
@@ -63,15 +65,15 @@
           <td>
             <span>{{parseInt(pageNo === 1 ? ($index + 1) : (($index + 1) + (pageSize * (pageNo - 1))))}}</span>
           </td>
-          <td>
+          <td style="min-width: 200px;max-width: 300px;padding-right: 10px;">
             <span class="ellipsis" :title="item.name">{{item.name}}</span>
           </td>
-          <td><a href="javascript:" class="links" @click="_go(item)"><span class="ellipsis">{{item.processInstanceName}}</span></a></td>
+          <td style="min-width: 200px;max-width: 300px;padding-right: 10px;"><a href="javascript:" class="links" @click="_go(item)"><span class="ellipsis" :title="item.processInstanceName">{{item.processInstanceName}}</span></a></td>
           <td>
             <span v-if="item.executorName">{{item.executorName}}</span>
             <span v-else>-</span>
           </td>
-          <td><span>{{item.taskType}}</span></td>
+          <td><span style="margin-left: 5px">{{item.taskType}}</span></td>
           <td><span v-html="_rtState(item.state)" style="cursor: pointer;"></span></td>
           <td>
             <span v-if="item.submitTime">{{item.submitTime | formatDate}}</span>
@@ -90,12 +92,23 @@
           <td><span>{{item.retryTimes}}</span></td>
           <td>
             <x-button
+                    v-if="item.state === 'FAILURE' || item.state === 'NEED_FAULT_TOLERANCE' || item.state === 'KILL'"
+                    type="error"
+                    shape="circle"
+                    size="xsmall"
+                    data-toggle="tooltip"
+                    :title="$t('Force success')"
+                    icon="ans-icon-success-solid"
+                    @click="_forceSuccess(item)">
+            </x-button>
+            <x-button
                     type="info"
                     shape="circle"
                     size="xsmall"
                     data-toggle="tooltip"
                     :title="$t('View log')"
                     icon="ans-icon-log"
+                    :disabled="item.taskType==='SUB_PROCESS'? true: false"
                     @click="_refreshLog(item)">
             </x-button>
           </td>
@@ -108,6 +121,7 @@
   import Permissions from '@/module/permissions'
   import mLog from '@/conf/home/pages/dag/_source/formModel/log'
   import { tasksState } from '@/conf/home/pages/dag/_source/config'
+  import { mapActions } from 'vuex'
 
   export default {
     name: 'list',
@@ -124,6 +138,7 @@
       pageSize: Number
     },
     methods: {
+      ...mapActions('dag', ['forceTaskSuccess']),
       _rtState (code) {
         let o = tasksState[code]
         return `<em class="${o.icoUnicode} ${o.isSpin ? 'as as-spin' : ''}" style="color:${o.color}" data-toggle="tooltip" data-container="body" title="${o.desc}"></em>`
@@ -152,6 +167,17 @@
               }
             })
           }
+        })
+      },
+      _forceSuccess (item) {
+        this.forceTaskSuccess({taskInstanceId: item.id}).then(res => {
+          if (res.code === 0) {
+            this.$message.success(res.msg)
+          } else {
+            this.$message.error(res.msg)
+          }
+        }).catch(e => {
+          this.$message.error(e.msg)
         })
       },
       _go (item) {

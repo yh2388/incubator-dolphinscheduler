@@ -21,7 +21,7 @@ import store from '@/conf/home/store'
 import router from '@/conf/home/router'
 import { uuid, findComponentDownward } from '@/module/util/'
 
-let Affirm = {}
+const Affirm = {}
 let $root = {}
 let $routerType = ''
 let $isPop = true
@@ -59,7 +59,7 @@ Affirm.paramVerification = (name) => {
   if (!$isPop) {
     return true
   }
-  let dagStore = store.state.dag
+  const dagStore = store.state.dag
   let flag = false
   if ($routerType === 'definition-create') {
     // No nodes jump out directly
@@ -72,7 +72,7 @@ Affirm.paramVerification = (name) => {
     }
   } else {
     // View history direct jump
-    flag = name === 'projects-instance-details' ? true : !dagStore.isEditDag
+    flag = name === 'projects-instance-details' ? true : (dagStore.isSwitchVersion || !dagStore.isEditDag)
   }
   return flag
 }

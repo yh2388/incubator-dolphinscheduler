@@ -16,10 +16,13 @@
  */
 package org.apache.dolphinscheduler.service.zk;
 
+import org.apache.dolphinscheduler.common.thread.ThreadUtils;
+
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.curator.framework.recipes.cache.TreeCache;
 import org.apache.curator.framework.recipes.cache.TreeCacheEvent;
+import org.apache.curator.framework.recipes.cache.TreeCacheListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -32,20 +35,12 @@ public class ZookeeperCachedOperator extends ZookeeperOperator {
     private final Logger logger = LoggerFactory.getLogger(ZookeeperCachedOperator.class);
 
 
-    TreeCache treeCache;
+    private TreeCache treeCache;
     /**
      * register a unified listener of /${dsRoot},
      */
     @Override
     protected void registerListener() {
-        treeCache = new TreeCache(zkClient, getZookeeperConfig().getDsRoot());
-        logger.info("add listener to zk path: {}", getZookeeperConfig().getDsRoot());
-        try {
-            treeCache.start();
-        } catch (Exception e) {
-            logger.error("add listener to zk path: {} failed", getZookeeperConfig().getDsRoot());
-            throw new RuntimeException(e);
-        }
 
         treeCache.getListenable().addListener((client, event) -> {
             String path = null == event.getData() ? "" : event.getData().getPath();
@@ -54,7 +49,18 @@ public class ZookeeperCachedOperator extends ZookeeperOperator {
             }
             dataChanged(client, event, path);
         });
+    }
 
+    @Override
+    protected void treeCacheStart() {
+        treeCache = new TreeCache(zkClient, getZookeeperConfig().getDsRoot() + "/nodes");
+        logger.info("add listener to zk path: {}", getZookeeperConfig().getDsRoot());
+        try {
+            treeCache.start();
+        } catch (Exception e) {
+            logger.error("add listener to zk path: {} failed", getZookeeperConfig().getDsRoot());
+            throw new RuntimeException(e);
+        }
     }
 
     //for sub class
@@ -72,13 +78,14 @@ public class ZookeeperCachedOperator extends ZookeeperOperator {
         return treeCache;
     }
 
+    public void addListener(TreeCacheListener listener){
+        this.treeCache.getListenable().addListener(listener);
+    }
+
     @Override
     public void close() {
         treeCache.close();
-        try {
-            Thread.sleep(500);
-        } catch (InterruptedException ignore) {
-        }
+        ThreadUtils.sleep(500);
         super.close();
     }
 }

@@ -18,8 +18,10 @@ package org.apache.dolphinscheduler.common.task.conditions;
 
 import org.apache.dolphinscheduler.common.enums.DependentRelation;
 import org.apache.dolphinscheduler.common.model.DependentTaskModel;
+import org.apache.dolphinscheduler.common.process.ResourceInfo;
 import org.apache.dolphinscheduler.common.task.AbstractParameters;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class ConditionsParameters extends AbstractParameters {
@@ -41,8 +43,8 @@ public class ConditionsParameters extends AbstractParameters {
     }
 
     @Override
-    public List<String> getResourceFilesList() {
-        return null;
+    public List<ResourceInfo> getResourceFilesList() {
+        return new ArrayList<>();
     }
 
     public List<DependentTaskModel> getDependTaskList() {

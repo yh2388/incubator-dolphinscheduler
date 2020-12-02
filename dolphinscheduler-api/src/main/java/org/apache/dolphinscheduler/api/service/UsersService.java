@@ -16,29 +16,33 @@
  */
 package org.apache.dolphinscheduler.api.service;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import org.apache.dolphinscheduler.api.dto.resources.ResourceComponent;
+import org.apache.dolphinscheduler.api.dto.resources.visitor.ResourceTreeVisitor;
 import org.apache.dolphinscheduler.api.enums.Status;
+import org.apache.dolphinscheduler.api.exceptions.ServiceException;
 import org.apache.dolphinscheduler.api.utils.CheckUtils;
 import org.apache.dolphinscheduler.api.utils.PageInfo;
 import org.apache.dolphinscheduler.api.utils.Result;
 import org.apache.dolphinscheduler.common.Constants;
+import org.apache.dolphinscheduler.common.enums.Flag;
 import org.apache.dolphinscheduler.common.enums.ResourceType;
 import org.apache.dolphinscheduler.common.enums.UserType;
-import org.apache.dolphinscheduler.common.utils.CollectionUtils;
-import org.apache.dolphinscheduler.common.utils.EncryptionUtils;
-import org.apache.dolphinscheduler.common.utils.HadoopUtils;
-import org.apache.dolphinscheduler.common.utils.PropertyUtils;
-import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import org.apache.dolphinscheduler.common.utils.StringUtils;
+import org.apache.dolphinscheduler.common.utils.*;
 import org.apache.dolphinscheduler.dao.entity.*;
 import org.apache.dolphinscheduler.dao.mapper.*;
+import org.apache.dolphinscheduler.dao.utils.ResourceProcessDefinitionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.IOException;
+import java.text.MessageFormat;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * user service
@@ -72,6 +76,9 @@ public class UsersService extends BaseService {
     @Autowired
     private AlertGroupMapper alertGroupMapper;
 
+    @Autowired
+    private ProcessDefinitionMapper processDefinitionMapper;
+
 
     /**
      * create user, only system admin have permission
@@ -93,7 +100,8 @@ public class UsersService extends BaseService {
                                           String email,
                                           int tenantId,
                                           String phone,
-                                          String queue) throws Exception {
+                                          String queue,
+                                          int state) throws Exception {
 
         Map<String, Object> result = new HashMap<>(5);
 
@@ -114,7 +122,7 @@ public class UsersService extends BaseService {
             return result;
         }
 
-        User user = createUser(userName, userPassword, email, tenantId, phone, queue);
+        User user = createUser(userName, userPassword, email, tenantId, phone, queue, state);
 
         Tenant tenant = tenantMapper.queryById(tenantId);
         // resource upload startup
@@ -132,13 +140,14 @@ public class UsersService extends BaseService {
 
     }
 
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = RuntimeException.class)
     public User createUser(String userName,
                                           String userPassword,
                                           String email,
                                           int tenantId,
                                           String phone,
-                                          String queue) throws Exception {
+                                          String queue,
+                                          int state) {
         User user = new User();
         Date now = new Date();
 
@@ -147,6 +156,7 @@ public class UsersService extends BaseService {
         user.setEmail(email);
         user.setTenantId(tenantId);
         user.setPhone(phone);
+        user.setState(state);
         // create general users, administrator users are currently built-in
         user.setUserType(UserType.GENERAL_USER);
         user.setCreateTime(now);
@@ -243,6 +253,8 @@ public class UsersService extends BaseService {
     /**
      * updateProcessInstance user
      *
+     *
+     * @param loginUser
      * @param userId user id
      * @param userName user name
      * @param userPassword user password
@@ -253,23 +265,25 @@ public class UsersService extends BaseService {
      * @return update result code
      * @throws Exception exception
      */
-    public Map<String, Object> updateUser(int userId,
+    public Map<String, Object> updateUser(User loginUser, int userId,
                                           String userName,
                                           String userPassword,
                                           String email,
                                           int tenantId,
                                           String phone,
-                                          String queue) throws Exception {
+                                          String queue,
+                                          int state) throws Exception {
         Map<String, Object> result = new HashMap<>(5);
         result.put(Constants.STATUS, false);
 
+        if (check(result, !hasPerm(loginUser, userId), Status.USER_NO_OPERATION_PERM)) {
+            return result;
+        }
         User user = userMapper.selectById(userId);
-
         if (user == null) {
             putMsg(result, Status.USER_NOT_EXIST, userId);
             return result;
         }
-
         if (StringUtils.isNotEmpty(userName)) {
 
             if (!CheckUtils.checkUserName(userName)){
@@ -301,14 +315,13 @@ public class UsersService extends BaseService {
             user.setEmail(email);
         }
 
-        if (StringUtils.isNotEmpty(phone)) {
-            if (!CheckUtils.checkPhone(phone)){
-                putMsg(result, Status.REQUEST_PARAMS_NOT_VALID_ERROR,phone);
-                return result;
-            }
-            user.setPhone(phone);
+        if (StringUtils.isNotEmpty(phone) && !CheckUtils.checkPhone(phone)) {
+            putMsg(result, Status.REQUEST_PARAMS_NOT_VALID_ERROR,phone);
+            return result;
         }
+        user.setPhone(phone);
         user.setQueue(queue);
+        user.setState(state);
         Date now = new Date();
         user.setUpdateTime(now);
 
@@ -333,18 +346,18 @@ public class UsersService extends BaseService {
                         List<Resource> fileResourcesList = resourceMapper.queryResourceList(
                                 null, userId, ResourceType.FILE.ordinal());
                         if (CollectionUtils.isNotEmpty(fileResourcesList)) {
-                            for (Resource resource : fileResourcesList) {
-                                HadoopUtils.getInstance().copy(oldResourcePath + "/" + resource.getAlias(), newResourcePath, false, true);
-                            }
+                            ResourceTreeVisitor resourceTreeVisitor = new ResourceTreeVisitor(fileResourcesList);
+                            ResourceComponent resourceComponent = resourceTreeVisitor.visit();
+                            copyResourceFiles(resourceComponent, oldResourcePath, newResourcePath);
                         }
 
                         //udf resources
                         List<Resource> udfResourceList = resourceMapper.queryResourceList(
                                 null, userId, ResourceType.UDF.ordinal());
                         if (CollectionUtils.isNotEmpty(udfResourceList)) {
-                            for (Resource resource : udfResourceList) {
-                                HadoopUtils.getInstance().copy(oldUdfsPath + "/" + resource.getAlias(), newUdfsPath, false, true);
-                            }
+                            ResourceTreeVisitor resourceTreeVisitor = new ResourceTreeVisitor(udfResourceList);
+                            ResourceComponent resourceComponent = resourceTreeVisitor.visit();
+                            copyResourceFiles(resourceComponent, oldUdfsPath, newUdfsPath);
                         }
 
                         //Delete the user from the old tenant directory
@@ -422,6 +435,7 @@ public class UsersService extends BaseService {
      * @param projectIds project id array
      * @return grant result code
      */
+    @Transactional(rollbackFor = RuntimeException.class)
     public Map<String, Object> grantProject(User loginUser, int userId, String projectIds) {
         Map<String, Object> result = new HashMap<>(5);
         result.put(Constants.STATUS, false);
@@ -471,6 +485,7 @@ public class UsersService extends BaseService {
      * @param resourceIds resource id array
      * @return grant result code
      */
+    @Transactional(rollbackFor = RuntimeException.class)
     public Map<String, Object> grantResources(User loginUser, int userId, String resourceIds) {
         Map<String, Object> result = new HashMap<>(5);
         //only admin can operate
@@ -483,23 +498,74 @@ public class UsersService extends BaseService {
             return result;
         }
 
+        Set<Integer> needAuthorizeResIds = new HashSet();
+        if (StringUtils.isNotBlank(resourceIds)) {
+            String[] resourceFullIdArr = resourceIds.split(",");
+            // need authorize resource id set
+            for (String resourceFullId : resourceFullIdArr) {
+                String[] resourceIdArr = resourceFullId.split("-");
+                for (int i=0;i<=resourceIdArr.length-1;i++) {
+                    int resourceIdValue = Integer.parseInt(resourceIdArr[i]);
+                    needAuthorizeResIds.add(resourceIdValue);
+                }
+            }
+        }
+
+
+        //get the authorized resource id list by user id
+        List<Resource> oldAuthorizedRes = resourceMapper.queryAuthorizedResourceList(userId);
+        //if resource type is UDF,need check whether it is bound by UDF functon
+        Set<Integer> oldAuthorizedResIds = oldAuthorizedRes.stream().map(t -> t.getId()).collect(Collectors.toSet());
+
+        //get the unauthorized resource id list
+        oldAuthorizedResIds.removeAll(needAuthorizeResIds);
+
+        if (CollectionUtils.isNotEmpty(oldAuthorizedResIds)) {
+
+            // get all resource id of process definitions those is released
+            List<Map<String, Object>> list = processDefinitionMapper.listResourcesByUser(userId);
+            Map<Integer, Set<Integer>> resourceProcessMap = ResourceProcessDefinitionUtils.getResourceProcessDefinitionMap(list);
+            Set<Integer> resourceIdSet = resourceProcessMap.keySet();
+
+            resourceIdSet.retainAll(oldAuthorizedResIds);
+            if (CollectionUtils.isNotEmpty(resourceIdSet)) {
+                logger.error("can't be deleted,because it is used of process definition");
+                for (Integer resId : resourceIdSet) {
+                    logger.error("resource id:{} is used of process definition {}",resId,resourceProcessMap.get(resId));
+                }
+                putMsg(result, Status.RESOURCE_IS_USED);
+                return result;
+            }
+
+        }
+
         resourcesUserMapper.deleteResourceUser(userId, 0);
 
         if (check(result, StringUtils.isEmpty(resourceIds), Status.SUCCESS)) {
             return result;
         }
 
-        String[] resourcesIdArr = resourceIds.split(",");
+        for (int resourceIdValue : needAuthorizeResIds) {
+            Resource resource = resourceMapper.selectById(resourceIdValue);
+            if (resource == null) {
+                putMsg(result, Status.RESOURCE_NOT_EXIST);
+                return result;
+            }
 
-        for (String resourceId : resourcesIdArr) {
             Date now = new Date();
             ResourcesUser resourcesUser = new ResourcesUser();
             resourcesUser.setUserId(userId);
-            resourcesUser.setResourcesId(Integer.parseInt(resourceId));
-            resourcesUser.setPerm(7);
+            resourcesUser.setResourcesId(resourceIdValue);
+            if (resource.isDirectory()) {
+                resourcesUser.setPerm(Constants.AUTHORIZE_READABLE_PERM);
+            }else{
+                resourcesUser.setPerm(Constants.AUTHORIZE_WRITABLE_PERM);
+            }
+
             resourcesUser.setCreateTime(now);
             resourcesUser.setUpdateTime(now);
             resourcesUserMapper.insert(resourcesUser);
+
         }
 
         putMsg(result, Status.SUCCESS);
@@ -516,6 +582,7 @@ public class UsersService extends BaseService {
      * @param udfIds udf id array
      * @return grant result code
      */
+    @Transactional(rollbackFor = RuntimeException.class)
     public Map<String, Object> grantUDFFunction(User loginUser, int userId, String udfIds) {
         Map<String, Object> result = new HashMap<>(5);
 
@@ -562,6 +629,7 @@ public class UsersService extends BaseService {
      * @param datasourceIds  data source id array
      * @return grant result code
      */
+    @Transactional(rollbackFor = RuntimeException.class)
     public Map<String, Object> grantDataSource(User loginUser, int userId, String datasourceIds) {
         Map<String, Object> result = new HashMap<>(5);
         result.put(Constants.STATUS, false);
@@ -757,24 +825,6 @@ public class UsersService extends BaseService {
     }
 
     /**
-     * check
-     *
-     * @param result result
-     * @param bool bool
-     * @param userNoOperationPerm status
-     * @return check result
-     */
-    private boolean check(Map<String, Object> result, boolean bool, Status userNoOperationPerm) {
-        //only admin can operate
-        if (bool) {
-            result.put(Constants.STATUS, userNoOperationPerm);
-            result.put(Constants.MSG, userNoOperationPerm.getMsg());
-            return true;
-        }
-        return false;
-    }
-
-    /**
      * @param tenantId tenant id
      * @return true if tenant exists, otherwise return false
      */
@@ -808,5 +858,164 @@ public class UsersService extends BaseService {
         }
 
         return msg;
+    }
+
+    /**
+     * copy resource files
+     * @param resourceComponent resource component
+     * @param srcBasePath       src base path
+     * @param dstBasePath       dst base path
+     * @throws IOException      io exception
+     */
+    private void copyResourceFiles(ResourceComponent resourceComponent, String srcBasePath, String dstBasePath) throws IOException {
+        List<ResourceComponent> components = resourceComponent.getChildren();
+
+        if (CollectionUtils.isNotEmpty(components)) {
+            for (ResourceComponent component:components) {
+                // verify whether exist
+                if (!HadoopUtils.getInstance().exists(String.format("%s/%s",srcBasePath,component.getFullName()))){
+                    logger.error("resource file: {} not exist,copy error",component.getFullName());
+                    throw new ServiceException(Status.RESOURCE_NOT_EXIST);
+                }
+
+                if (!component.isDirctory()) {
+                    // copy it to dst
+                    HadoopUtils.getInstance().copy(String.format("%s/%s",srcBasePath,component.getFullName()),String.format("%s/%s",dstBasePath,component.getFullName()),false,true);
+                    continue;
+                }
+
+                if(CollectionUtils.isEmpty(component.getChildren())) {
+                    // if not exist,need create it
+                    if (!HadoopUtils.getInstance().exists(String.format("%s/%s",dstBasePath,component.getFullName()))) {
+                        HadoopUtils.getInstance().mkdir(String.format("%s/%s",dstBasePath,component.getFullName()));
+                    }
+                }else{
+                    copyResourceFiles(component,srcBasePath,dstBasePath);
+                }
+            }
+        }
+    }
+
+    /**
+     * register user, default state is 0, default tenant_id is 1, no phone, no queue
+     *
+     * @param userName       user name
+     * @param userPassword   user password
+     * @param repeatPassword repeat password
+     * @param email          email
+     * @return register result code
+     * @throws Exception exception
+     */
+    @Transactional(rollbackFor = RuntimeException.class)
+    public Map<String, Object> registerUser(String userName, String userPassword, String repeatPassword, String email) {
+        Map<String, Object> result = new HashMap<>();
+
+        //check user params
+        String msg = this.checkUserParams(userName, userPassword, email, "");
+
+        if (!StringUtils.isEmpty(msg)) {
+            putMsg(result, Status.REQUEST_PARAMS_NOT_VALID_ERROR,msg);
+            return result;
+        }
+
+        if (!userPassword.equals(repeatPassword)) {
+            putMsg(result, Status.REQUEST_PARAMS_NOT_VALID_ERROR, "two passwords are not same");
+            return result;
+        }
+        User user = createUser(userName, userPassword, email, 1, "", "", Flag.NO.ordinal());
+        putMsg(result, Status.SUCCESS);
+        result.put(Constants.DATA_LIST, user);
+        return result;
+    }
+
+    /**
+     * activate user, only system admin have permission, change user state code 0 to 1
+     *
+     * @param loginUser login user
+     * @param userName  user name
+     * @return create result code
+     */
+    public Map<String, Object> activateUser(User loginUser, String userName) {
+        Map<String, Object> result = new HashMap<>();
+        result.put(Constants.STATUS, false);
+
+        if (!isAdmin(loginUser)) {
+            putMsg(result, Status.USER_NO_OPERATION_PERM);
+            return result;
+        }
+
+        if (!CheckUtils.checkUserName(userName)){
+            putMsg(result, Status.REQUEST_PARAMS_NOT_VALID_ERROR, userName);
+            return result;
+        }
+
+        User user = userMapper.queryByUserNameAccurately(userName);
+
+        if (user == null) {
+            putMsg(result, Status.USER_NOT_EXIST, userName);
+            return result;
+        }
+
+        if (user.getState() != Flag.NO.ordinal()) {
+            putMsg(result, Status.REQUEST_PARAMS_NOT_VALID_ERROR, userName);
+            return result;
+        }
+
+        user.setState(Flag.YES.ordinal());
+        Date now = new Date();
+        user.setUpdateTime(now);
+        userMapper.updateById(user);
+        User responseUser = userMapper.queryByUserNameAccurately(userName);
+        putMsg(result, Status.SUCCESS);
+        result.put(Constants.DATA_LIST, responseUser);
+        return result;
+    }
+
+    /**
+     * activate user, only system admin have permission, change users state code 0 to 1
+     *
+     * @param loginUser login user
+     * @param userNames user name
+     * @return create result code
+     */
+    public Map<String, Object> batchActivateUser(User loginUser, List<String> userNames) {
+        Map<String, Object> result = new HashMap<>();
+
+        if (!isAdmin(loginUser)) {
+            putMsg(result, Status.USER_NO_OPERATION_PERM);
+            return result;
+        }
+
+        int totalSuccess = 0;
+        List<String> successUserNames = new ArrayList<>();
+        Map<String, Object> successRes = new HashMap<>();
+        int totalFailed = 0;
+        List<Map<String, String>> failedInfo = new ArrayList<>();
+        Map<String, Object> failedRes = new HashMap<>();
+        for (String userName : userNames) {
+            Map<String, Object> tmpResult = activateUser(loginUser, userName);
+            if (tmpResult.get(Constants.STATUS) != Status.SUCCESS) {
+                totalFailed++;
+                Map<String, String> failedBody = new HashMap<>();
+                failedBody.put("userName", userName);
+                Status status = (Status) tmpResult.get(Constants.STATUS);
+                String errorMessage = MessageFormat.format(status.getMsg(), userName);
+                failedBody.put("msg", errorMessage);
+                failedInfo.add(failedBody);
+            } else {
+                totalSuccess++;
+                successUserNames.add(userName);
+            }
+        }
+        successRes.put("sum", totalSuccess);
+        successRes.put("userName", successUserNames);
+        failedRes.put("sum", totalFailed);
+        failedRes.put("info", failedInfo);
+        Map<String, Object> res = new HashMap<>();
+        res.put("success", successRes);
+        res.put("failed", failedRes);
+        putMsg(result, Status.SUCCESS);
+        result.put(Constants.DATA_LIST, res);
+        return result;
     }
 }

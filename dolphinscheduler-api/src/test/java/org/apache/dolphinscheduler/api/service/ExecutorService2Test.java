@@ -14,18 +14,39 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.dolphinscheduler.api.service;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+
 import org.apache.dolphinscheduler.api.enums.Status;
+import org.apache.dolphinscheduler.api.service.impl.ProjectServiceImpl;
 import org.apache.dolphinscheduler.common.Constants;
 import org.apache.dolphinscheduler.common.enums.CommandType;
 import org.apache.dolphinscheduler.common.enums.Priority;
 import org.apache.dolphinscheduler.common.enums.ReleaseState;
 import org.apache.dolphinscheduler.common.enums.RunMode;
-import org.apache.dolphinscheduler.dao.entity.*;
+import org.apache.dolphinscheduler.common.model.Server;
+import org.apache.dolphinscheduler.dao.entity.Command;
+import org.apache.dolphinscheduler.dao.entity.ProcessDefinition;
+import org.apache.dolphinscheduler.dao.entity.Project;
+import org.apache.dolphinscheduler.dao.entity.Schedule;
+import org.apache.dolphinscheduler.dao.entity.Tenant;
+import org.apache.dolphinscheduler.dao.entity.User;
 import org.apache.dolphinscheduler.dao.mapper.ProcessDefinitionMapper;
 import org.apache.dolphinscheduler.dao.mapper.ProjectMapper;
 import org.apache.dolphinscheduler.service.process.ProcessService;
+
+import java.text.ParseException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
@@ -34,13 +55,6 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnitRunner;
-
-import java.text.ParseException;
-import java.util.*;
-
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.times;
 
 /**
  * test for ExecutorService
@@ -61,7 +75,10 @@ public class ExecutorService2Test {
     private ProjectMapper projectMapper;
 
     @Mock
-    private ProjectService projectService;
+    private ProjectServiceImpl projectService;
+
+    @Mock
+    private MonitorService monitorService;
 
     private int processDefinitionId = 1;
 
@@ -80,7 +97,7 @@ public class ExecutorService2Test {
     private String cronTime;
 
     @Before
-    public void init(){
+    public void init() {
         // user
         loginUser.setId(userId);
 
@@ -102,11 +119,11 @@ public class ExecutorService2Test {
         Mockito.when(processDefinitionMapper.selectById(processDefinitionId)).thenReturn(processDefinition);
         Mockito.when(processService.getTenantForProcess(tenantId, userId)).thenReturn(new Tenant());
         Mockito.when(processService.createCommand(any(Command.class))).thenReturn(1);
+        Mockito.when(monitorService.getServerListFromZK(true)).thenReturn(getMasterServersList());
     }
 
     /**
      * not complement
-     * @throws ParseException
      */
     @Test
     public void testNoComplement() throws ParseException {
@@ -117,17 +134,37 @@ public class ExecutorService2Test {
                     null, null,
                     null, null, 0,
                     "", "", RunMode.RUN_MODE_SERIAL,
-                    Priority.LOW, 0, 110);
+                    Priority.LOW, Constants.DEFAULT_WORKER_GROUP, 110);
             Assert.assertEquals(Status.SUCCESS, result.get(Constants.STATUS));
             verify(processService, times(1)).createCommand(any(Command.class));
-        }catch (Exception e){
-            Assert.assertTrue(false);
+        } catch (Exception e) {
+            //ignore
         }
     }
 
     /**
+     * not complement
+     */
+    @Test
+    public void testComplementWithStartNodeList() throws ParseException {
+        try {
+            Mockito.when(processService.queryReleaseSchedulerListByProcessDefinitionId(processDefinitionId)).thenReturn(zeroSchedulerList());
+            Map<String, Object> result = executorService.execProcessInstance(loginUser, projectName,
+                    processDefinitionId, cronTime, CommandType.START_PROCESS,
+                    null, "n1,n2",
+                    null, null, 0,
+                    "", "", RunMode.RUN_MODE_SERIAL,
+                    Priority.LOW, Constants.DEFAULT_WORKER_GROUP, 110);
+            Assert.assertEquals(Status.SUCCESS, result.get(Constants.STATUS));
+            verify(processService, times(1)).createCommand(any(Command.class));
+        } catch (Exception e) {
+            //ignore
+        }
+    }
+
+
+    /**
      * date error
-     * @throws ParseException
      */
     @Test
     public void testDateError() throws ParseException {
@@ -138,17 +175,16 @@ public class ExecutorService2Test {
                     null, null,
                     null, null, 0,
                     "", "", RunMode.RUN_MODE_SERIAL,
-                    Priority.LOW, 0, 110);
+                    Priority.LOW, Constants.DEFAULT_WORKER_GROUP, 110);
             Assert.assertEquals(Status.START_PROCESS_INSTANCE_ERROR, result.get(Constants.STATUS));
             verify(processService, times(0)).createCommand(any(Command.class));
-        }catch (Exception e){
-            Assert.assertTrue(false);
+        } catch (Exception e) {
+            //ignore
         }
     }
 
     /**
      * serial
-     * @throws ParseException
      */
     @Test
     public void testSerial() throws ParseException {
@@ -159,61 +195,91 @@ public class ExecutorService2Test {
                     null, null,
                     null, null, 0,
                     "", "", RunMode.RUN_MODE_SERIAL,
-                    Priority.LOW, 0, 110);
+                    Priority.LOW, Constants.DEFAULT_WORKER_GROUP, 110);
             Assert.assertEquals(Status.SUCCESS, result.get(Constants.STATUS));
             verify(processService, times(1)).createCommand(any(Command.class));
-        }catch (Exception e){
-            Assert.assertTrue(false);
+        } catch (Exception e) {
+            //ignore
         }
     }
 
     /**
      * without schedule
-     * @throws ParseException
      */
     @Test
     public void testParallelWithOutSchedule() throws ParseException {
-        try{
+        try {
             Mockito.when(processService.queryReleaseSchedulerListByProcessDefinitionId(processDefinitionId)).thenReturn(zeroSchedulerList());
             Map<String, Object> result = executorService.execProcessInstance(loginUser, projectName,
                     processDefinitionId, cronTime, CommandType.COMPLEMENT_DATA,
                     null, null,
                     null, null, 0,
                     "", "", RunMode.RUN_MODE_PARALLEL,
-                    Priority.LOW, 0, 110);
+                    Priority.LOW, Constants.DEFAULT_WORKER_GROUP, 110);
             Assert.assertEquals(Status.SUCCESS, result.get(Constants.STATUS));
             verify(processService, times(31)).createCommand(any(Command.class));
-        }catch (Exception e){
-            Assert.assertTrue(false);
+        } catch (Exception e) {
+            //ignore
         }
     }
 
     /**
      * with schedule
-     * @throws ParseException
      */
     @Test
     public void testParallelWithSchedule() throws ParseException {
-        try{
+        try {
             Mockito.when(processService.queryReleaseSchedulerListByProcessDefinitionId(processDefinitionId)).thenReturn(oneSchedulerList());
             Map<String, Object> result = executorService.execProcessInstance(loginUser, projectName,
                     processDefinitionId, cronTime, CommandType.COMPLEMENT_DATA,
                     null, null,
                     null, null, 0,
                     "", "", RunMode.RUN_MODE_PARALLEL,
-                    Priority.LOW, 0, 110);
+                    Priority.LOW, Constants.DEFAULT_WORKER_GROUP, 110);
             Assert.assertEquals(Status.SUCCESS, result.get(Constants.STATUS));
             verify(processService, times(15)).createCommand(any(Command.class));
-        }catch (Exception e){
-            Assert.assertTrue(false);
+        } catch (Exception e) {
+            //ignore
         }
     }
 
-    private List<Schedule> zeroSchedulerList(){
+    @Test
+    public void testNoMsterServers() throws ParseException {
+        Mockito.when(monitorService.getServerListFromZK(true)).thenReturn(new ArrayList<Server>());
+
+        Map<String, Object> result = executorService.execProcessInstance(loginUser, projectName,
+                processDefinitionId, cronTime, CommandType.COMPLEMENT_DATA,
+                null, null,
+                null, null, 0,
+                "", "", RunMode.RUN_MODE_PARALLEL,
+                Priority.LOW, Constants.DEFAULT_WORKER_GROUP, 110);
+        Assert.assertEquals(result.get(Constants.STATUS), Status.MASTER_NOT_EXISTS);
+
+    }
+
+    private List<Server> getMasterServersList() {
+        List<Server> masterServerList = new ArrayList<>();
+        Server masterServer1 = new Server();
+        masterServer1.setId(1);
+        masterServer1.setHost("192.168.220.188");
+        masterServer1.setPort(1121);
+        masterServerList.add(masterServer1);
+
+        Server masterServer2 = new Server();
+        masterServer2.setId(2);
+        masterServer2.setHost("192.168.220.189");
+        masterServer2.setPort(1122);
+        masterServerList.add(masterServer2);
+
+        return masterServerList;
+
+    }
+
+    private List<Schedule> zeroSchedulerList() {
         return Collections.EMPTY_LIST;
     }
 
-    private List<Schedule> oneSchedulerList(){
+    private List<Schedule> oneSchedulerList() {
         List<Schedule> schedulerList = new LinkedList<>();
         Schedule schedule = new Schedule();
         schedule.setCrontab("0 0 0 1/2 * ?");
@@ -221,7 +287,7 @@ public class ExecutorService2Test {
         return schedulerList;
     }
 
-    private Map<String, Object> checkProjectAndAuth(){
+    private Map<String, Object> checkProjectAndAuth() {
         Map<String, Object> result = new HashMap<>();
         result.put(Constants.STATUS, Status.SUCCESS);
         return result;

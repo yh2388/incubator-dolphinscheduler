@@ -21,8 +21,11 @@
         <h2>
           <span>{{name}}</span>
           <div class="down">
-            <em class="ans-icon-download" data-container="body" data-toggle="tooltip" :title="$t('Download Details')" @click="_downloadFile"></em>
+            <em class="ans-icon-download" style="font-size:20px" data-container="body" data-toggle="tooltip" :title="$t('Download Details')" @click="_downloadFile"></em>
             <em>{{size}}</em>
+            &nbsp;&nbsp;
+            <em class="ans-icon-fail-empty" style="font-size:20px" data-container="body" data-toggle="tooltip" :title="$t('Return')" @click="close()"></em>
+            &nbsp;&nbsp;
           </div>
         </h2>
         <template v-if="isNoType">
@@ -80,6 +83,9 @@
       _go () {
         this.$router.push({ name: 'file' })
       },
+      close () {
+        this.$router.go(-1)
+      },
       _downloadFile () {
         downloadFile('/dolphinscheduler/resources/download', {
           id: this.$route.params.id
@@ -118,7 +124,7 @@
        * up
        */
       _onUp: _.debounce(function () {
-        this.loadingIndex = this.loadingIndex - 2
+        this.loadingIndex = this.loadingIndex - 3
         console.log('_onUp')
         this._editorOff()
 
@@ -131,7 +137,7 @@
        * down
        */
       _onDown: _.debounce(function () {
-        this.loadingIndex = this.loadingIndex + 2
+        this.loadingIndex = this.loadingIndex + 3
         console.log('_onDown')
         this._editorOff()
 
@@ -166,11 +172,11 @@
           // down
           if ((scrollTop + h) > totalHeight) {
             if (this.isData) {
-              this._onDown()
+              // this._onDown()
             }
           }
           // up
-          if (scrollTop < 2) {
+          if (scrollTop < 3) {
             if (this.loadingIndex > 0) {
               this._onUp()
             }
@@ -210,7 +216,7 @@
         return {
           id: this.$route.params.id,
           skipLineNum: parseInt(`${this.loadingIndex ? this.loadingIndex + '000' : 0}`),
-          limit: parseInt(`${this.loadingIndex ? this.loadingIndex + 2 : 2}000`)
+          limit: parseInt(`${this.loadingIndex ? this.loadingIndex + 3 : 3}000`)
         }
       }
     },
@@ -232,7 +238,7 @@
         position: absolute;
         right: 0;
         top: 0;
-        >i {
+        >em {
           font-size: 20px;
           color: #2d8cf0;
           cursor: pointer;

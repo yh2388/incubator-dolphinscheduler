@@ -30,19 +30,7 @@
                     :disabled="item ? true : false"
                     v-model="tenantCode"
                     maxlength="60"
-                    :placeholder="$t('Please enter name')">
-            </x-input>
-          </template>
-        </m-list-box-f>
-        <m-list-box-f>
-          <template slot="name"><strong>*</strong>{{$t('Tenant Name')}}</template>
-          <template slot="content">
-            <x-input
-                    type="input"
-                    v-model="tenantName"
-                    maxlength="60"
-                    :placeholder="$t('Please enter name')"
-                    autocomplete="off">
+                    :placeholder="$t('Please enter tenant code')">
             </x-input>
           </template>
         </m-list-box-f>
@@ -80,7 +68,6 @@
   import store from '@/conf/home/store'
   import mPopup from '@/module/components/popup/popup'
   import mListBoxF from '@/module/components/listBoxF/listBoxF'
-
   export default {
     name: 'create-tenement',
     data () {
@@ -89,7 +76,6 @@
         queueList: [],
         queueId: '',
         tenantCode: '',
-        tenantName: '',
         description: '',
       }
     },
@@ -133,7 +119,6 @@
       },
       _verification () {
         let isEn = /^[0-9a-zA-Z_.-]{1,}$/
-
         if (!this.tenantCode.replace(/\s*/g,"")) {
           this.$message.warning(`${i18n.$t('Please enter the tenant code in English')}`)
           return false
@@ -142,24 +127,18 @@
           this.$message.warning(`${i18n.$t('Please enter tenant code in English')}`)
           return false
         }
-        if (!this.tenantName.replace(/\s*/g,"")) {
-          this.$message.warning(`${i18n.$t('Please enter name')}`)
-          return false
-        }
         return true
       },
       _submit () {
         // 提交
         let param = {
           tenantCode: this.tenantCode,
-          tenantName: this.tenantName,
           queueId: this.queueId,
           description: this.description
         }
         if (this.item) {
           param.id = this.item.id
         }
-
         this.$refs['popup'].spinnerLoading = true
         this.store.dispatch(`security/${this.item ? 'updateQueue' : 'createQueue'}`, param).then(res => {
           this.$emit('onUpdate')
@@ -182,13 +161,11 @@
             this.queueId = this.item.queueId
           })
           this.tenantCode = this.item.tenantCode
-          this.tenantName = this.item.tenantName
           this.description = this.item.description
         }
       })
     },
     mounted () {
-
     },
     components: { mPopup, mListBoxF }
   }
